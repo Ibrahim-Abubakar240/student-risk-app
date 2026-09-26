@@ -180,11 +180,6 @@ if st.sidebar.button("Predict Risk"):
     else:
         st.sidebar.error(f"⚠️ At Risk | Confidence: {proba[0]*100:.1f}%")
 
-    # Store this prediction's input so the main area can show the SHAP explanation
-    st.session_state['last_prediction_input'] = input_data
-    st.session_state['last_prediction_label'] = pred
-    st.session_state['last_prediction_proba'] = proba
-
 # ---------------------------------------------------------------------
 # MAIN AREA — show full record of the loaded student, if any
 # ---------------------------------------------------------------------
@@ -197,81 +192,6 @@ if st.session_state.loaded_student_id is not None:
         risk = "Not At Risk ✅" if student['risk_status'].values[0] == 1 else "At Risk ⚠️"
         st.write(f"**Risk Status:** {risk}")
         st.dataframe(student)
-
-# ---------------------------------------------------------------------
-# SHAP EXPLANATION — shows which factors drove the most recent prediction
-#
-# Uses shap.LinearExplainer instead of the generic model-agnostic Explainer.
-# Since Logistic Regression is a linear model, LinearExplainer computes exact
-# contributions directly via matrix multiplication — no repeated model calls,
-# no permutation sampling, so it returns almost instantly instead of hanging.
-# ---------------------------------------------------------------------
-@st.cache_resource
-def get_shap_explainer(_model, _df, _features):
-    preprocessor = _model.named_steps['preprocessor']
-    classifier = _model.named_steps['classifier']
-
-    background = _df[_features].sample(n=min(200, len(_df)), random_state=42)
-    background_transformed = preprocessor.transform(background)
-
-    explainer = shap.LinearExplainer(classifier, background_transformed)
-
-    # Map each transformed column (e.g. "cat__gender_male") back to its
-    # original feature name ("gender"), so contributions from one-hot
-    # encoded categories can be summed back into a single readable row.
-    transformed_names = preprocessor.get_feature_names_out()
-    clean_names = [n.split('__', 1)[1] if '__' in n else n for n in transformed_names]
-
-    categorical_sorted = sorted(
-        [f for f in _features if f not in _df.select_dtypes(include='number').columns],
-        key=len, reverse=True
-    )
-
-    def parent_feature(clean_name):
-        for cat_col in categorical_sorted:
-            if clean_name == cat_col or clean_name.startswith(cat_col + "_"):
-                return cat_col
-        return clean_name  # numeric column: name is already the original feature
-
-    parents = [parent_feature(n) for n in clean_names]
-    return preprocessor, explainer, parents
-
-if 'last_prediction_input' in st.session_state:
-    st.subheader("🔎 Why did the model make this prediction?")
-
-    preprocessor, explainer, parents = get_shap_explainer(model, df, features)
-
-    instance_transformed = preprocessor.transform(st.session_state['last_prediction_input'])
-    raw_shap_values = explainer.shap_values(instance_transformed)[0]
-
-    # LinearExplainer's raw values represent contribution toward class 1
-    # (Not At Risk). Flip the sign when the predicted class is 0 (At Risk),
-    # so a positive bar always means "supports the predicted outcome."
-    pred_class = st.session_state['last_prediction_label']
-    sign = 1 if pred_class == 1 else -1
-
-    contributions = {}
-    for parent, val in zip(parents, raw_shap_values):
-        contributions[parent] = contributions.get(parent, 0.0) + (val * sign)
-
-    contrib_df = pd.DataFrame({
-        "Feature": list(contributions.keys()),
-        "Contribution": list(contributions.values())
-    }).sort_values(by="Contribution", key=abs, ascending=True)
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    colors = ['#d62728' if v < 0 else '#2ca02c' for v in contrib_df["Contribution"]]
-    ax.barh(contrib_df["Feature"], contrib_df["Contribution"], color=colors)
-    ax.set_xlabel("Contribution to Prediction")
-    ax.set_title(
-        f"Feature Contributions to '{'Not At Risk' if pred_class == 1 else 'At Risk'}' Prediction"
-    )
-    st.pyplot(fig)
-
-    st.caption(
-        "Green bars supported the predicted outcome; red bars pushed against it. "
-        "Longer bars indicate a stronger influence on this specific student's prediction."
-    )
 
 # MAIN TABS
 tab1, tab2, tab3 = st.tabs(["📊 Dataset Overview", "📈 Visualizations", "🤖 Model Performance"])
