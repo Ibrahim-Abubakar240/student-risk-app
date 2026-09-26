@@ -12,7 +12,7 @@ st.title("🎓 Student Risk Prediction System")
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("student_risk_data.csv")
+    df = pd.read_csv("student_Performance.csv")
     return df
 
 @st.cache_resource
