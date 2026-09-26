@@ -207,7 +207,7 @@ if 'last_prediction_input' in st.session_state:
     with st.spinner("Calculating feature contributions..."):
         # Background sample: a small random subset of real students,
         # used as a reference point for SHAP to measure each feature's impact against.
-        background = df[features].sample(n=20, random_state=42)
+        background = df[features].sample(n=100, random_state=42)
 
         # A model-agnostic explainer wrapping the full pipeline's predict_proba,
         # so explanations are given in terms of the original 10 features,
