@@ -200,29 +200,63 @@ if st.session_state.loaded_student_id is not None:
 
 # ---------------------------------------------------------------------
 # SHAP EXPLANATION — shows which factors drove the most recent prediction
+#
+# Uses shap.LinearExplainer instead of the generic model-agnostic Explainer.
+# Since Logistic Regression is a linear model, LinearExplainer computes exact
+# contributions directly via matrix multiplication — no repeated model calls,
+# no permutation sampling, so it returns almost instantly instead of hanging.
 # ---------------------------------------------------------------------
+@st.cache_resource
+def get_shap_explainer(_model, _df, _features):
+    preprocessor = _model.named_steps['preprocessor']
+    classifier = _model.named_steps['classifier']
+
+    background = _df[_features].sample(n=min(200, len(_df)), random_state=42)
+    background_transformed = preprocessor.transform(background)
+
+    explainer = shap.LinearExplainer(classifier, background_transformed)
+
+    # Map each transformed column (e.g. "cat__gender_male") back to its
+    # original feature name ("gender"), so contributions from one-hot
+    # encoded categories can be summed back into a single readable row.
+    transformed_names = preprocessor.get_feature_names_out()
+    clean_names = [n.split('__', 1)[1] if '__' in n else n for n in transformed_names]
+
+    categorical_sorted = sorted(
+        [f for f in _features if f not in _df.select_dtypes(include='number').columns],
+        key=len, reverse=True
+    )
+
+    def parent_feature(clean_name):
+        for cat_col in categorical_sorted:
+            if clean_name == cat_col or clean_name.startswith(cat_col + "_"):
+                return cat_col
+        return clean_name  # numeric column: name is already the original feature
+
+    parents = [parent_feature(n) for n in clean_names]
+    return preprocessor, explainer, parents
+
 if 'last_prediction_input' in st.session_state:
     st.subheader("🔎 Why did the model make this prediction?")
 
-    with st.spinner("Calculating feature contributions..."):
-        # Background sample: a small random subset of real students,
-        # used as a reference point for SHAP to measure each feature's impact against.
-        background = df[features].sample(n=100, random_state=42)
+    preprocessor, explainer, parents = get_shap_explainer(model, df, features)
 
-        # A model-agnostic explainer wrapping the full pipeline's predict_proba,
-        # so explanations are given in terms of the original 10 features,
-        # not the internally expanded one-hot encoded columns.
-        explainer = shap.Explainer(model.predict_proba, background)
-        shap_values = explainer(st.session_state['last_prediction_input'])
+    instance_transformed = preprocessor.transform(st.session_state['last_prediction_input'])
+    raw_shap_values = explainer.shap_values(instance_transformed)[0]
 
-    # Class index: 0 = At Risk, 1 = Not At Risk — explain whichever class was predicted
+    # LinearExplainer's raw values represent contribution toward class 1
+    # (Not At Risk). Flip the sign when the predicted class is 0 (At Risk),
+    # so a positive bar always means "supports the predicted outcome."
     pred_class = st.session_state['last_prediction_label']
-    values = shap_values.values[0, :, pred_class]
-    feature_names = st.session_state['last_prediction_input'].columns.tolist()
+    sign = 1 if pred_class == 1 else -1
+
+    contributions = {}
+    for parent, val in zip(parents, raw_shap_values):
+        contributions[parent] = contributions.get(parent, 0.0) + (val * sign)
 
     contrib_df = pd.DataFrame({
-        "Feature": feature_names,
-        "Contribution": values
+        "Feature": list(contributions.keys()),
+        "Contribution": list(contributions.values())
     }).sort_values(by="Contribution", key=abs, ascending=True)
 
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -235,7 +269,7 @@ if 'last_prediction_input' in st.session_state:
     st.pyplot(fig)
 
     st.caption(
-        "Green bars pushed the prediction toward the shown outcome; red bars pushed against it. "
+        "Green bars supported the predicted outcome; red bars pushed against it. "
         "Longer bars indicate a stronger influence on this specific student's prediction."
     )
 
