@@ -5,6 +5,7 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix
+import shap
 
 st.set_page_config(page_title="Student Risk Prediction System", layout="wide")
 
@@ -179,6 +180,11 @@ if st.sidebar.button("Predict Risk"):
     else:
         st.sidebar.error(f"⚠️ At Risk | Confidence: {proba[0]*100:.1f}%")
 
+    # Store this prediction's input so the main area can show the SHAP explanation
+    st.session_state['last_prediction_input'] = input_data
+    st.session_state['last_prediction_label'] = pred
+    st.session_state['last_prediction_proba'] = proba
+
 # ---------------------------------------------------------------------
 # MAIN AREA — show full record of the loaded student, if any
 # ---------------------------------------------------------------------
@@ -191,6 +197,47 @@ if st.session_state.loaded_student_id is not None:
         risk = "Not At Risk ✅" if student['risk_status'].values[0] == 1 else "At Risk ⚠️"
         st.write(f"**Risk Status:** {risk}")
         st.dataframe(student)
+
+# ---------------------------------------------------------------------
+# SHAP EXPLANATION — shows which factors drove the most recent prediction
+# ---------------------------------------------------------------------
+if 'last_prediction_input' in st.session_state:
+    st.subheader("🔎 Why did the model make this prediction?")
+
+    with st.spinner("Calculating feature contributions..."):
+        # Background sample: a small random subset of real students,
+        # used as a reference point for SHAP to measure each feature's impact against.
+        background = df[features].sample(n=100, random_state=42)
+
+        # A model-agnostic explainer wrapping the full pipeline's predict_proba,
+        # so explanations are given in terms of the original 10 features,
+        # not the internally expanded one-hot encoded columns.
+        explainer = shap.Explainer(model.predict_proba, background)
+        shap_values = explainer(st.session_state['last_prediction_input'])
+
+    # Class index: 0 = At Risk, 1 = Not At Risk — explain whichever class was predicted
+    pred_class = st.session_state['last_prediction_label']
+    values = shap_values.values[0, :, pred_class]
+    feature_names = st.session_state['last_prediction_input'].columns.tolist()
+
+    contrib_df = pd.DataFrame({
+        "Feature": feature_names,
+        "Contribution": values
+    }).sort_values(by="Contribution", key=abs, ascending=True)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    colors = ['#d62728' if v < 0 else '#2ca02c' for v in contrib_df["Contribution"]]
+    ax.barh(contrib_df["Feature"], contrib_df["Contribution"], color=colors)
+    ax.set_xlabel("Contribution to Prediction")
+    ax.set_title(
+        f"Feature Contributions to '{'Not At Risk' if pred_class == 1 else 'At Risk'}' Prediction"
+    )
+    st.pyplot(fig)
+
+    st.caption(
+        "Green bars pushed the prediction toward the shown outcome; red bars pushed against it. "
+        "Longer bars indicate a stronger influence on this specific student's prediction."
+    )
 
 # MAIN TABS
 tab1, tab2, tab3 = st.tabs(["📊 Dataset Overview", "📈 Visualizations", "🤖 Model Performance"])
