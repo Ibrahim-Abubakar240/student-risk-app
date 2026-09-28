@@ -5,7 +5,7 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix
-import shap
+
 
 st.set_page_config(page_title="Student Risk Prediction System", layout="wide")
 
